@@ -1,0 +1,205 @@
+---
+title: "Cleaning Code"
+author: "Lei Qian"
+date: "May 23, 2016"
+output: pdf_document
+---
+```{r}
+# if necessary, install these packages first #
+#install.packages("dplyr")
+#install.packages("magrittr")
+library(dplyr)
+library(magrittr)
+# function to change total minutes to hour:minutes#
+time.func <- function(min){
+  h <- floor(min/60)
+  m <- min %% 60
+  #convert single digit to double digits
+  if (m>=0 & m<10){
+    m <- paste0(0, m)
+  }
+  if (h>=0 & h<10){
+    h <- paste0(0, h)
+  }
+  return(paste0(h, ":", m))
+}
+singleFunc <- function(digit){
+  if(digit < 10){
+    return(paste0(0,digit))}
+  else(return(digit))
+}
+  #separate out the original entries that have both SPOSTMIN and SACTMIN
+sep.func <- function(dataFrame){
+  # both not NA $
+	data1 <- dataFrame %>% filter(!is.na(SPOSTMIN), !is.na(SACTMIN))
+	if(nrow(data1) == 0){
+	  return(dataFrame)
+	}
+	else{
+  # at least one is NA # 
+  data2 <- dataFrame %>% filter(is.na(SPOSTMIN) | is.na(SACTMIN))
+  
+  data1.1 <- rbind(data1, data1)
+  # make first half SPOSTMIN NA # 
+  data1.1[1:nrow(data1),]$SPOSTMIN <- NA
+  # make second half SACTMIN NA #
+  data1.1[(nrow(data1)+1):nrow(data1.1),]$SACTMIN <- NA
+  return(rbind(data1.1, data2))
+	}  
+}
+timeseries <- function(park, ride, window, startDate = "12/01/2009", endDate = "12/31/2016"){
+  # inputs # 
+  # park = initial of the park; all caps
+  # ride = number of specific ride # 
+  # window = length of time in minutes # 
+  # startDate and endDate in the format "12/01/2009"  Month/Day/Year
+  filename <- paste0("waittimes_",park,".Rdata")
+  #data <- read.csv(filename)
+  load(filename)
+  ride <- singleFunc(ride)
+  # subset ride out #
+  data <- data[data$sattid == paste0(park,ride),]
+
+  
+  # sep data obs with both SPOST and SACT#
+  data <- sep.func(data)
+  
+  
+  data$dateObject <- strptime(data$date, "%m/%d/%y", tz = "EST")
+	startDate <- strptime(startDate, "%m/%d/%Y", tz = "EST")
+  endDate <- strptime(endDate, "%m/%d/%Y", tz = "EST")
+
+  #data <- data %>% filter(dateObject <= endDate, dateObject >= startDate) 
+  data <- data[data$dateObject <= endDate & data$dateObject >= startDate,]
+
+  
+  # finding unique days in data # 
+  data.days <- unique(apply(data[,c("SMONTH", "SDAY", "SYEAR")], 1, paste, collapse = "/"))
+  # number of unique days #
+  num.unq <- length(data.days)
+  # rounded up num. of windows in one day #
+  range.day <- ceiling(24*60/window)
+  # total number of windows for all unique day # 
+  tot.range <- num.unq*range.day
+  # vetor of windows for each day # 
+  winds <- c()
+  for(i in 1:(range.day-1)){
+    winds[i] <- paste0(time.func((i-1)*window), "-", time.func(i*window))
+  }
+  winds[range.day] <- paste0(time.func((range.day-1)*window),"-", time.func(1440))
+  
+  # hours + min to minutes # 
+  data$totmin <- (data$SHOUR * 60) + data$SMIN
+  for (i in 1: nrow(data)){
+    if (!is.na(data$SACTMIN[i])){
+      data$totmin[i] = data$totmin[i] - data$SACTMIN[i]
+    }
+  }
+  # in this order #
+  # sort by year increasing # 
+  # sort by month inc. #
+  # sort by day inc. # 
+  # sort by hour inc. # 
+  # sort by min. inc. # 
+  data <- data[order(data$SYEAR, data$SMONTH, data$SDAY, data$totmin, decreasing = FALSE),]
+  
+  
+  # new table that we want to produce # 
+  results <- data.frame(date = rep(strptime(data.days, "%m/%d/%Y", tz = "EST"), each = range.day), window = rep.int(winds, num.unq))
+  results$start <- seq(from = 0, to = (range.day -1)) * window
+  results$end <- c(seq(from = 1, to = (range.day -1)) * window, 1440) 
+  # results has four columns # 
+  
+  # the first one is the date # 
+  # the second is the window - time range # 
+  # the third and fourth display the start and end of the time range respectively # 
+  
+  
+  data$datemod <- as.character(strptime(data$date, "%m/%d/%y", tz = "EST"))
+  results$date <- as.character(results$date)
+  
+  # strptime will change the two date formats into the same one # 
+  # as.character changes it from a date type to a character type # 
+  
+  
+  # we only care about these variables so select only these columns # 
+  data <- data %>% select(SPOSTMIN, SACTMIN, totmin, datemod)
+  # the first row index for which a unique day appears # 
+  beg <- match(unique(results$date), data$datemod)
+  # the last row index for which a unique day appears # 
+  end <- c((beg[-1] - 1), nrow(data))
+  range.ind <- cbind(beg, end)
+  
+  # takes in indices for each unique day# 
+  values <- function(index){
+    # start a data frame to store results # 
+    #     results.values <- data.frame(AvgPost = 0, AvgAct = 0, NumPost = 0, NumAct = 0)
+    # subset of data set for unique day # 
+    data.wanted <- data[range.ind[index,"beg"]:range.ind[index,"end"],]
+    results.values <- data.frame(AvgPost = NA, AvgAct = NA, NumPost = NA, NumAct = NA, Ratio = NA)
+    currentPosition = 1
+    for (i in 1:range.day){
+      totalPost = 0
+      totalActual = 0
+      numPost = 0
+      numActual = 0
+      #print(data.wanted[currentPosition, "totmin"])
+      while (currentPosition <= nrow(data.wanted) & data.wanted[currentPosition, "totmin"] >= results$start[i] & data.wanted[currentPosition, "totmin"] < results$end[i]){
+        if (!is.na(data.wanted[currentPosition, "SPOSTMIN"])){
+          totalPost = totalPost + data.wanted[currentPosition, "SPOSTMIN"]
+          numPost = numPost + 1
+        }
+        if (!is.na(data.wanted[currentPosition, "SACTMIN"])){
+          totalActual = totalActual + data.wanted[currentPosition,"SACTMIN"]
+          numActual = numActual + 1
+        }
+        currentPosition = currentPosition + 1
+      }
+      
+      results.values[i, "NumPost"] = numPost
+      results.values[i, "NumAct"] = numActual
+      if (numPost != 0){
+        avgPost = totalPost/numPost
+        results.values[i, "AvgPost"] = avgPost
+      }
+      if (numActual != 0){
+        avgActual = totalActual/numActual
+        results.values[i, "AvgAct"] = avgActual
+        
+      }
+      if (numPost!=0 & numActual != 0 & results.values[i, "AvgAct"] != 0){
+      	results.values[i, "Ratio"] = results.values[i, "AvgPost"]/results.values[i, "AvgAct"]
+      }
+       
+      
+      }
+    	results.values$Diff = results.values$AvgPost - results.values$AvgAct
+    	return(results.values)
+    }
+
+  results.values <-lapply(1:length(unique(results$date)), values)
+  results.values <- do.call(rbind, results.values)
+  #colnames(results.values) <- c("AvgPost", "AvgAct", "NumPost", "NumAct")
+  results <- cbind(results[,c("date", "window","start")], results.values)
+  return(results)
+}
+
+
+
+
+
+ak11.results <- timeseries(park = "AK", ride = 11, window = 10, startDate = "01/01/2014", endDate = "12/31/2015")
+#ak20.results <- timeseries(park = "AK", ride = 20, window = 10)
+
+
+
+#ex <- ak20.results %>% filter(NumAct != 0, NumPost != 0)
+#plot(table(ex$date))
+
+#ex.post <- ak20.results %>% filter(NumPost != 0)
+#plot(table(ex.post$date))
+
+#ex.actual <- ak20.results %>% filter(NumAct != 0)
+#plot(table(ex.actual$date))
+```
+
