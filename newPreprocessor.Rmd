@@ -188,18 +188,39 @@ timeseries <- function(park, ride, window, startDate = "12/01/2009", endDate = "
 
 
 
-ak11.results <- timeseries(park = "AK", ride = 11, window = 10, startDate = "08/03/2014", endDate = "08/03/2014")
+
+
 #ak20.results <- timeseries(park = "AK", ride = 20, window = 10)
 
+avgRatio <- function(resultsDataFrame){
+  window = resultsDataFrame$start[2]-resultsDataFrame$start[1]
+  range.day <- ceiling(24*60/window)
+  tot.days <- nrow(resultsDataFrame)/range.day
+  vals <- c()
+  result <- c()
+  for(i in 1:range.day){
+    vals <- resultsDataFrame$Ratio[i + range.day * (0:(tot.days-1))]
+    result[i] <- mean(vals, na.rm = TRUE)
+  }
+  
+  return(result)
+}
 
 
-#ex <- ak20.results %>% filter(NumAct != 0, NumPost != 0)
-#plot(table(ex$date))
+  
+  
+ak11.results <- timeseries(park = "AK", ride = 11, window = 10, startDate = "08/03/2014", endDate = "08/03/2014")
+View(avgRatio(ak11.results))
+plot(1:length(avgRatio(ak11.results)),avgRatio(ak11.results),ylim=c(0,10))
 
-#ex.post <- ak20.results %>% filter(NumPost != 0)
-#plot(table(ex.post$date))
 
-#ex.actual <- ak20.results %>% filter(NumAct != 0)
-#plot(table(ex.actual$date))
+# ex <- ak20.results %>% filter(NumAct != 0, NumPost != 0)
+# plot(table(ex$date))
+
+# ex.post <- ak20.results %>% filter(NumPost != 0)
+# plot(table(ex.post$date))
+
+# ex.actual <- ak20.results %>% filter(NumAct != 0)
+# plot(table(ex.actual$date))
 ```
 
