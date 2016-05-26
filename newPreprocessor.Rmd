@@ -188,7 +188,7 @@ timeseries <- function(park, ride, window, startDate = "12/01/2009", endDate = "
 
 
 
-ak11.results <- timeseries(park = "AK", ride = 11, window = 10, startDate = "01/01/2014", endDate = "12/31/2015")
+ak11.results <- timeseries(park = "AK", ride = 11, window = 10, startDate = "08/03/2014", endDate = "08/03/2014")
 #ak20.results <- timeseries(park = "AK", ride = 20, window = 10)
 
 
