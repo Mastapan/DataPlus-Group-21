@@ -8,13 +8,25 @@ output: pdf_document
 # if necessary, install these packages first #
 #install.packages("dplyr")
 #install.packages("magrittr")
+#install.packages("lubridate")
 library(dplyr)
 library(magrittr)
+library(lubridate)
+
+# data <- read.csv("waittimes_AK.csv")
+# save(data, file = "waittimes_AK.Rdata")
+
 # function to change total minutes to hour:minutes#
-time.func <- function(min){
+totalMinToHours <- function(min){
+  # hours # 
   h <- floor(min/60)
+  # minutes #
   m <- min %% 60
   #convert single digit to double digits
+  if(is.na(min)){
+    return(NA)
+  }
+  else{
   if (m>=0 & m<10){
     m <- paste0(0, m)
   }
@@ -22,14 +34,18 @@ time.func <- function(min){
     h <- paste0(0, h)
   }
   return(paste0(h, ":", m))
+  }
 }
-singleFunc <- function(digit){
+singleToDoubleDigit <- function(digit){
   if(digit < 10){
-    return(paste0(0,digit))}
-  else(return(digit))
+    return(paste0(0,digit))
+  }
+  else{
+    return(as.character(digit))
+  }
 }
   #separate out the original entries that have both SPOSTMIN and SACTMIN
-sep.func <- function(dataFrame){
+splitPostActMin <- function(dataFrame){
   # both not NA $
 	data1 <- dataFrame %>% filter(!is.na(SPOSTMIN), !is.na(SACTMIN))
 	if(nrow(data1) == 0){
@@ -38,7 +54,7 @@ sep.func <- function(dataFrame){
 	else{
   # at least one is NA # 
   data2 <- dataFrame %>% filter(is.na(SPOSTMIN) | is.na(SACTMIN))
-  
+  # data 1 + data 2 = dataFrame # 
   data1.1 <- rbind(data1, data1)
   # make first half SPOSTMIN NA # 
   data1.1[1:nrow(data1),]$SPOSTMIN <- NA
@@ -47,8 +63,8 @@ sep.func <- function(dataFrame){
   return(rbind(data1.1, data2))
 	}  
 }
-timeseries <- function(park, ride, window, startDate = "12/01/2009", endDate = "12/31/2016"){
-  # inputs # 
+preProcess <- function(park, ride, windowSize, startDate = "11/01/2009", endDate = "12/31/2016"){
+    # inputs # 
   # park = initial of the park; all caps
   # ride = number of specific ride # 
   # window = length of time in minutes # 
@@ -56,58 +72,81 @@ timeseries <- function(park, ride, window, startDate = "12/01/2009", endDate = "
   filename <- paste0("waittimes_",park,".Rdata")
   #data <- read.csv(filename)
   load(filename)
-  ride <- singleFunc(ride)
+  # when loaded, dataframe in variable (data) #
+  
   # subset ride out #
+  ride <- singleToDoubleDigit(ride)
   data <- data[data$sattid == paste0(park,ride),]
 
   
-  # sep data obs with both SPOST and SACT#
-  data <- sep.func(data)
+  # sep data entries with both SPOST and SACT into two #
+  data <- splitPostActMin(data)
   
+  data$convertedDate <- paste0(sapply(data$SMONTH, singleToDoubleDigit), "/", sapply(data$SDAY, singleToDoubleDigit), "/", sapply((data$SYEAR-2000), singleToDoubleDigit))
+  data <- data[data$date == data$convertedDate, ]
   
-  data$dateObject <- strptime(data$date, "%m/%d/%y", tz = "EST")
+  data$datemod <- strptime(data$date, "%m/%d/%y", tz = "EST")
+  #data$dateObject <- strptime(data$date, "%m/%d/%y", tz = "EST")
 	startDate <- strptime(startDate, "%m/%d/%Y", tz = "EST")
   endDate <- strptime(endDate, "%m/%d/%Y", tz = "EST")
 
   #data <- data %>% filter(dateObject <= endDate, dateObject >= startDate) 
-  data <- data[data$dateObject <= endDate & data$dateObject >= startDate,]
+  data <- data[data$datemod <= endDate & data$datemod >= startDate,]
 
   
-  # finding unique days in data # 
-  data.days <- unique(apply(data[,c("SMONTH", "SDAY", "SYEAR")], 1, paste, collapse = "/"))
-  # number of unique days #
-  num.unq <- length(data.days)
-  # rounded up num. of windows in one day #
-  range.day <- ceiling(24*60/window)
-  # total number of windows for all unique day # 
-  tot.range <- num.unq*range.day
-  # vetor of windows for each day # 
-  winds <- c()
-  for(i in 1:(range.day-1)){
-    winds[i] <- paste0(time.func((i-1)*window), "-", time.func(i*window))
-  }
-  winds[range.day] <- paste0(time.func((range.day-1)*window),"-", time.func(1440))
+  # finding unique days in data data.days# 
+  unqDays <- unique(apply(data[,c("SMONTH", "SDAY", "SYEAR")], 1, paste, collapse = "/"))
+  # number of unique days num.unq#
+  numUnqDays <- length(unqDays)
+  # rounded up num. of windows in one day range.day #
+  numWindowsPerDay <- ceiling(24*60/windowSize)
+  # total number of windows for all unique days - tot.range # 
+  totalWindows <- numUnqDays*numWindowsPerDay
   
-  # hours + min to minutes # 
-  data$totmin <- (data$SHOUR * 60) + data$SMIN
+   # hours + min to minutes # 
+  data$totmin	<- (data$SHOUR * 60) + data$SMIN
   for (i in 1: nrow(data)){
     if (!is.na(data$SACTMIN[i])){
       data$totmin[i] = data$totmin[i] - data$SACTMIN[i]
     }
   }
+  
   # in this order #
   # sort by year increasing # 
   # sort by month inc. #
   # sort by day inc. # 
   # sort by hour inc. # 
   # sort by min. inc. # 
+	
   data <- data[order(data$SYEAR, data$SMONTH, data$SDAY, data$totmin, decreasing = FALSE),]
+  return(list(data = data, unqDays = unqDays, numUnqDays = numUnqDays, numWindowsPerDay = numWindowsPerDay, windowSize = windowSize))
+}
+
+
+windowGenerationPerPeriod <- function(infoList){
   
+  data <- infoList$data
+  unqDays <- infoList$unqDays
+  #num.unq#
+  numUnqDays <- infoList$numUnqDays
+  #range.day#
+  numWindowsPerDay <- infoList$numWindowsPerDay
+  #tot.range#
+  #totalWindows <- infoList$totalWindows
+  #window # 
+  windowSize <- infoList$windowSize
+  #winds <- c()#
+  windowEntries <- c()
+  for(i in 1:(numWindowsPerDay-1)){
+    windowEntries[i] <- paste0(totalMinToHours((i-1)*windowSize), "-", totalMinToHours(i*windowSize))
+  }
+  windowEntries[numWindowsPerDay] <- paste0(totalMinToHours((numWindowsPerDay-1)*windowSize),"-", totalMinToHours(1440))
   
+ 
   # new table that we want to produce # 
-  results <- data.frame(date = rep(strptime(data.days, "%m/%d/%Y", tz = "EST"), each = range.day), window = rep.int(winds, num.unq))
-  results$start <- seq(from = 0, to = (range.day -1)) * window
-  results$end <- c(seq(from = 1, to = (range.day -1)) * window, 1440) 
+  results <- data.frame(date = rep(strptime(unqDays, "%m/%d/%Y", tz = "EST"), each = numWindowsPerDay), window = rep.int(windowEntries, numUnqDays))
+  results$start <- seq(from = 0, to = (numWindowsPerDay -1)) * windowSize
+  results$end <- c(seq(from = 1, to = (numWindowsPerDay -1)) * windowSize, 1440) 
   # results has four columns # 
   
   # the first one is the date # 
@@ -115,7 +154,7 @@ timeseries <- function(park, ride, window, startDate = "12/01/2009", endDate = "
   # the third and fourth display the start and end of the time range respectively # 
   
   
-  data$datemod <- as.character(strptime(data$date, "%m/%d/%y", tz = "EST"))
+  data$datemod <- as.character(data$datemod)
   results$date <- as.character(results$date)
   
   # strptime will change the two date formats into the same one # 
@@ -131,14 +170,14 @@ timeseries <- function(park, ride, window, startDate = "12/01/2009", endDate = "
   range.ind <- cbind(beg, end)
   
   # takes in indices for each unique day# 
-  values <- function(index){
+  windowGenerationPerDay <- function(index){
     # start a data frame to store results # 
-    #     results.values <- data.frame(AvgPost = 0, AvgAct = 0, NumPost = 0, NumAct = 0)
+    # results.values <- data.frame(AvgPost = 0, AvgAct = 0, NumPost = 0, NumAct = 0)
     # subset of data set for unique day # 
     data.wanted <- data[range.ind[index,"beg"]:range.ind[index,"end"],]
     results.values <- data.frame(AvgPost = NA, AvgAct = NA, NumPost = NA, NumAct = NA, Ratio = NA)
     currentPosition = 1
-    for (i in 1:range.day){
+    for (i in 1:numWindowsPerDay){
       totalPost = 0
       totalActual = 0
       numPost = 0
@@ -170,36 +209,55 @@ timeseries <- function(park, ride, window, startDate = "12/01/2009", endDate = "
       if (numPost!=0 & numActual != 0 & results.values[i, "AvgAct"] != 0){
       	results.values[i, "Ratio"] = results.values[i, "AvgPost"]/results.values[i, "AvgAct"]
       }
-       
-      
       }
     	results.values$Diff = results.values$AvgPost - results.values$AvgAct
     	return(results.values)
     }
 
-  results.values <-lapply(1:length(unique(results$date)), values)
+  results.values <-lapply(1:length(unique(results$date)), windowGenerationPerDay)
   results.values <- do.call(rbind, results.values)
   #colnames(results.values) <- c("AvgPost", "AvgAct", "NumPost", "NumAct")
   results <- cbind(results[,c("date", "window","start")], results.values)
   return(results)
 }
 
+findStartTimePerDay <- function(infoList){
+	data <- infoList$data
+  startTimeList = list()
+  for (i in 1: nrow(data)){
+    startTime = data$totmin[i] - data$SSINCEOPEN[i]
+    correctDay <- data$datemod[i]
+    if (startTime < 0){
+      correctDay <- correctDay - days(1)
+      startTime = 1440 + startTime
+   	}
+    startTimeList[[as.character(correctDay)]] = totalMinToHours(startTime)
+  }
+  return(startTimeList)
+}
 
-
-
-
-
-
-#ak20.results <- timeseries(park = "AK", ride = 20, window = 10)
-
+# tot.days to numUnqDays#
 avgRatio <- function(resultsDataFrame){
-  window = resultsDataFrame$start[2]-resultsDataFrame$start[1]
-  range.day <- ceiling(24*60/window)
-  tot.days <- nrow(resultsDataFrame)/range.day
+  windowSize = resultsDataFrame$start[2]-resultsDataFrame$start[1]
+  numWindowsPerDay <- ceiling(24*60/windowSize)
+   <- nrow(resultsDataFrame)/numWindowsPerDay
   vals <- c()
   result <- c()
-  for(i in 1:range.day){
-    vals <- resultsDataFrame$Ratio[i + range.day * (0:(tot.days-1))]
+  for(i in 1:numWindowsPerDay){
+    vals <- resultsDataFrame$Ratio[i + numWindowsPerDay * (0:(numUnqDays-1))]
+    result[i] <- mean(vals, na.rm = TRUE)
+  }
+  
+  return(result)
+}
+avgDiff <- function(resultsDataFrame){
+  windowSize = resultsDataFrame$start[2]-resultsDataFrame$start[1]
+  numWindowsPerDay <- ceiling(24*60/windowSize)
+  numUnqDays <- nrow(resultsDataFrame)/numWindowsPerDay
+  vals <- c()
+  result <- c()
+  for(i in 1:numWindowsPerDay){
+    vals <- resultsDataFrame$Diff[i + numWindowsPerDay * (0:(numUnqDays-1))]
     result[i] <- mean(vals, na.rm = TRUE)
   }
   
@@ -207,13 +265,24 @@ avgRatio <- function(resultsDataFrame){
 }
 
 
-  
-  
-ak11.results <- timeseries(park = "AK", ride = 11, window = 10, startDate = "08/03/2014", endDate = "08/03/2014")
-View(avgRatio(ak11.results))
-plot(1:length(avgRatio(ak11.results)),avgRatio(ak11.results),ylim=c(0,10))
 
+ex <- preProcess(park = "AK", ride = 07, window = 10, "08/03/2014", "08/07/2014")
+windowGenerationPerPeriod(ex)
+findStartTimePerDay(ex)
 
+  
+ak11.results <- windowGenerationPerPeriod(preProcess(park = "AK", ride = 11, window = 10, startDate = "08/01/2014", endDate = "08/31/2014"))
+plot(1:length(avgRatio(ak11.results)),avgRatio(ak11.results), ylim = c(0, 5))
+View(cbind(1:length(avgRatio(ak11.results)), avgRatio(ak11.results)))
+
+####plot two different things on one graph
+plot(1:length(avgRatio(ak11.results)),avgRatio(ak11.results), col="red",ylim = c(0, 10))
+par(new=TRUE)
+plot(1:length(avgDiff(ak11.results)),avgDiff(ak11.results),col="blue",ylab='',xlab='',yaxt="n",ylim = c(0, 10))
+axis(side=4)
+mtext(side=4,line=-1.5,'avgDiff(ak11.results))')
+####
+  
 # ex <- ak20.results %>% filter(NumAct != 0, NumPost != 0)
 # plot(table(ex$date))
 
